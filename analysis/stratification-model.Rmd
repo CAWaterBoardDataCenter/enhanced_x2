@@ -1,0 +1,345 @@
+---
+title: "stratification-model"
+author: "Sam Bashevkin"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = 'docs',
+      knit_root_dir = "../",
+      envir = globalenv()
+    )
+    })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+packages
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(readr)
+library(tidyr)
+library(lubridate)
+library(stringr)
+library(ggplot2)
+library(GGally)
+library(mgcv)
+library(itsadug)
+```
+
+read data
+```{r}
+d<-read_csv("data/X2_ModelInputs_v1.csv")%>%
+  filter(if_any(everything(), ~ !is.na(.x)))%>% # Remove empty rows
+  rename(NDOI=`NDOI (cfs)`, Diurnal_inequality=`Diurnal Inequality (m)`, Stratification=`Stratification (PSU)`,
+         X2_surface=`X2 Top Salinity (km)`, X2_bottom=`X2 Bottom Salinity (km)`)%>%
+  mutate(Date=dmy(Date))%>%
+  arrange(Date)%>%
+  mutate(NDOI_change=NDOI-lag(NDOI),
+         NDOI_change_mag=abs(NDOI_change),
+         NDOI_change_sign=sign(NDOI_change),
+         NDOI_prop_change=NDOI_change/lag(NDOI)) 
+
+d_long<-d%>%
+  select(-NDOI_change_mag, -NDOI_change_sign)%>%
+  pivot_longer(cols = c(NDOI, NDOI_change, NDOI_prop_change, 
+                        Diurnal_inequality, Stratification,
+                        X2_surface, X2_bottom),
+               names_to="variable",
+               values_to="value")
+```
+
+# Plots
+
+full timeseries
+```{r, fig.height=10}
+ggplot(d_long, aes(x=Date, y=value, color=variable))+
+  geom_line()+
+  facet_wrap(~variable, ncol=1, scales="free_y")+
+  scale_color_viridis_d()+
+  theme_bw()+
+  theme(legend.position="none")
+```
+
+zoomed-in timeseries for May through September of 2022
+```{r, fig.height=10}
+ggplot(filter(d_long, year(Date)==2022 & month(Date)>=5), aes(x=Date, y=value, color=variable))+
+  geom_line()+
+  facet_wrap(~variable, ncol=1, scales="free_y")+
+  scale_color_viridis_d()+
+  theme_bw()+
+  theme(legend.position="none")
+```
+
+Diurnal_inequality vs stratification
+```{r}
+ggplot(d, aes(x=Diurnal_inequality, y=Stratification, color=X2_surface))+
+  geom_point()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
+X2 vs stratification
+```{r}
+ggplot(d, aes(x=X2_surface, y=Stratification, color=Diurnal_inequality))+
+  geom_point()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
+NDOI vs stratification
+```{r}
+ggplot(d, aes(x=NDOI, y=Stratification, color=Diurnal_inequality))+
+  geom_point()+
+  scale_x_log10()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
+NDOI change vs stratification
+```{r}
+ggplot(d, aes(x=abs(NDOI_change_mag), y=Stratification, color=factor(NDOI_change_sign)))+
+  geom_point()+
+  scale_x_log10()+
+  scale_color_viridis_d()+
+  theme_bw()
+```
+
+NDOI prop change vs stratification
+```{r}
+ggplot(d, aes(x=abs(NDOI_prop_change), y=Stratification, color=Diurnal_inequality))+
+  geom_point()+
+  #scale_x_log10()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
+NDOI vs X2
+```{r}
+ggplot(d, aes(x=NDOI, y=X2_surface, color=Diurnal_inequality))+
+  geom_point()+
+  scale_x_log10()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
+NDOI change vs X2
+```{r}
+ggplot(d, aes(x=NDOI_change_mag, y=X2_surface, color=log(NDOI)))+
+  geom_point()+
+  scale_x_log10()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
+Pairs plot of all variables
+```{r, warning=FALSE, fig.height=10, fig.width=10}
+ggpairs(d)+
+  theme_bw()
+```
+
+Takeaways to inform model construction
+1. NDOI_ _change_mag is highly correlated with NDOI, but NDOI_change is not
+2. X2 is highly correlated with NDOI
+3. Diurnal_inequality not correlated with anything (except slightly with stratification)
+
+# Model
+
+Prepare data
+```{r}
+d_model<-d%>%
+  drop_na()%>%
+  mutate(across(c(Stratification, NDOI), list(l=~log(.x))),
+         across(c(NDOI, NDOI_l, NDOI_change, Diurnal_inequality), list(s=~(.x-mean(.x))/sd(.x))))
+```
+
+Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m1_NOAR<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model)
+par(mfrow=c(1,1))
+m1_r <- start_value_rho(m1_NOAR, plot=TRUE)
+m1<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model, rho=m1_r)
+par(mfrow=c(2,2))
+gam.check(m1)
+summary(m1)
+```
+
+
+Stratification_l ~ s(NDOI_s) +s(NDOI_change_s) + s(Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m2_NOAR<-bam(Stratification_l ~ s(NDOI_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model)
+m2_r <- start_value_rho(m2_NOAR, plot=FALSE)
+m2<-bam(Stratification_l ~ s(NDOI_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model, rho=m2_r)
+gam.check(m2)
+summary(m2)
+
+AIC(m1, m2)
+```
+
+NDOI_change_s has an edf of 1 indicating the relationship is linear, so changing to linear
+
+Stratification_l ~ s(NDOI_s) + NDOI_change_s + s(Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m3_NOAR<-bam(Stratification_l ~ s(NDOI_s) + NDOI_change_s + s(Diurnal_inequality_s), data=d_model)
+m3_r <- start_value_rho(m3_NOAR, plot=FALSE)
+m3<-bam(Stratification_l ~ s(NDOI_s) + NDOI_change_s + s(Diurnal_inequality_s), data=d_model, rho=m3_r)
+gam.check(m3)
+summary(m3)
+
+AIC(m1, m2, m3)
+```
+
+Same model as above, it must have just automatically converted to linear when it detected it was such. NDOI_change_s has no sig effect so dropping it. 
+
+Stratification_l ~ s(NDOI_s) + s(Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m4_NOAR<-bam(Stratification_l ~ s(NDOI_s) + s(Diurnal_inequality_s), data=d_model)
+m4_r <- start_value_rho(m4_NOAR, plot=FALSE)
+m4<-bam(Stratification_l ~ s(NDOI_s) + s(Diurnal_inequality_s), data=d_model, rho=m4_r)
+gam.check(m4)
+summary(m4)
+
+AIC(m1, m2, m4)
+```
+
+Slightly better and more parsimonious without NDOI_change, so trying an interaction between 2 remaining variables
+
+Stratification_l ~ te(NDOI_s, Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m5_NOAR<-bam(Stratification_l ~ te(NDOI_s, Diurnal_inequality_s), data=d_model)
+m5_r <- start_value_rho(m5_NOAR, plot=FALSE)
+m5<-bam(Stratification_l ~ te(NDOI_s, Diurnal_inequality_s), data=d_model, rho=m5_r)
+gam.check(m5)
+summary(m5)
+
+AIC(m1, m2, m4, m5)
+```
+
+This is worse, so m4 is best so far
+
+Now trying with NDOI log transformed
+
+Stratification_l ~ te(NDOI_l_s, NDOI_change_s, Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m1b_NOAR<-bam(Stratification_l ~ te(NDOI_l_s, NDOI_change_s, Diurnal_inequality_s), data=d_model)
+m1b_r <- start_value_rho(m1b_NOAR, plot=FALSE)
+m1b<-bam(Stratification_l ~ te(NDOI_l_s, NDOI_change_s, Diurnal_inequality_s), data=d_model, rho=m1b_r)
+gam.check(m1b)
+summary(m1b)
+```
+
+
+Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m2b_NOAR<-bam(Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model)
+m2b_r <- start_value_rho(m2b_NOAR, plot=FALSE)
+m2b<-bam(Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model, rho=m2b_r)
+gam.check(m2b)
+summary(m2b)
+
+AIC(m1b, m2b)
+```
+
+Slightly better and more parsimonious. Only Diurnal_frequency is nonlinear, so using linear versions of the other 2
+
+Stratification_l ~ NDOI_l_s + NDOI_change_s + s(Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m3b_NOAR<-bam(Stratification_l ~ NDOI_l_s + NDOI_change_s + s(Diurnal_inequality_s), data=d_model)
+m3b_r <- start_value_rho(m3b_NOAR, plot=FALSE)
+m3b<-bam(Stratification_l ~ NDOI_l_s + NDOI_change_s + s(Diurnal_inequality_s), data=d_model, rho=m3b_r)
+gam.check(m3b)
+summary(m3b)
+
+AIC(m1b, m2b, m3b)
+```
+
+Better, but NDOI_change isn't significant, so dropping it
+
+Stratification_l ~ NDOI_l_s + s(Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m4b_NOAR<-bam(Stratification_l ~ NDOI_l_s + s(Diurnal_inequality_s), data=d_model)
+m4b_r <- start_value_rho(m4b_NOAR, plot=FALSE)
+m4b<-bam(Stratification_l ~ NDOI_l_s + s(Diurnal_inequality_s), data=d_model, rho=m4b_r)
+gam.check(m4b)
+summary(m4b)
+
+AIC(m1b, m2b, m3b, m4b)
+```
+
+Basically the same and more parsimonious. Now trying an interaction among 2 remaining variables. 
+
+Stratification_l ~ te(NDOI_l_s, Diurnal_inequality_s)
+```{r}
+par(mfrow=c(2,2))
+m5b_NOAR<-bam(Stratification_l ~ te(NDOI_l_s, Diurnal_inequality_s), data=d_model)
+m5b_r <- start_value_rho(m5b_NOAR, plot=FALSE)
+m5b<-bam(Stratification_l ~ te(NDOI_l_s, Diurnal_inequality_s), data=d_model, rho=m5b_r)
+gam.check(m5b)
+summary(m5b)
+
+AIC(m1b, m2b, m3b, m4b, m5b)
+```
+
+Worse, so m4b is best of this round, now comparing with m4
+```{r}
+AIC(m4, m4b)
+```
+
+m4b is best, moving forward with that
+
+## Plot m4 results
+
+Generate predictions
+```{r}
+newdata<-expand_grid(NDOI=seq(min(d_model$NDOI), max(d_model$NDOI), length.out=50),
+                     Diurnal_inequality=seq(min(d_model$Diurnal_inequality), max(d_model$Diurnal_inequality), length.out=50))%>%
+  mutate(NDOI_l=log(NDOI),
+         NDOI_l_s=(NDOI_l-mean(d_model$NDOI_l))/sd(d_model$NDOI_l),
+         Diurnal_inequality_s=(Diurnal_inequality-mean(d_model$Diurnal_inequality))/sd(d_model$Diurnal_inequality))
+
+m4b_pred<-predict(m4b, newdata=newdata, se=TRUE)
+
+newdata_pred<-newdata%>%
+  mutate(Stratification_l=m4b_pred$fit,
+         Stratification_l_se=m4b_pred$se.fit,
+         Stratification_l_u95=Stratification_l+Stratification_l_se*qnorm(0.95),
+         Stratification_l_l95=Stratification_l-Stratification_l_se*qnorm(0.95),
+         across(c(Stratification_l, Stratification_l_u95, Stratification_l_l95), exp))%>%
+  rename_with(~str_remove(.x, fixed("_l")), c(Stratification_l, Stratification_l_u95, Stratification_l_l95))
+```
+
+
+plot by NDOI
+```{r}
+ggplot(filter(newdata_pred, Diurnal_inequality%in%unique(Diurnal_inequality)[c(1, 25, 50)]), aes(x=NDOI, y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=Diurnal_inequality, color=Diurnal_inequality, group=Diurnal_inequality))+
+  geom_ribbon(alpha=0.4, color=NA)+
+  geom_line()+
+  scale_fill_viridis_c(aesthetics = c("color", "fill"))+
+  theme_bw()
+```
+
+
+plot by Diurnal_inequality
+```{r}
+ggplot(filter(newdata_pred, NDOI%in%unique(NDOI)[c(1, 25, 50)]), aes(x=Diurnal_inequality, y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=NDOI, color=NDOI, group=NDOI))+
+  geom_ribbon(alpha=0.4, color=NA)+
+  geom_line()+
+  scale_fill_viridis_c(aesthetics = c("color", "fill"))+
+  theme_bw()
+```
