@@ -2,7 +2,11 @@
 title: "stratification-model"
 author: "Sam Bashevkin"
 date: "`r Sys.Date()`"
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
 editor_options: 
   chunk_output_type: console
 knit: (function(input, ...) {
@@ -160,18 +164,21 @@ d_model<-d%>%
          across(c(NDOI, NDOI_l, NDOI_change, Diurnal_inequality), list(s=~(.x-mean(.x))/sd(.x))))
 ```
 
+## m1 
+
 Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s)
 ```{r}
 par(mfrow=c(2,2))
-m1_NOAR<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model)
+m1_NOAR<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model) # first fit model with autoregressive (AR) term
 par(mfrow=c(1,1))
-m1_r <- start_value_rho(m1_NOAR, plot=TRUE)
-m1<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model, rho=m1_r)
+m1_r <- start_value_rho(m1_NOAR, plot=TRUE) # Estimate rho for autoregressive term
+m1<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model, rho=m1_r) # fit autoregressive model
 par(mfrow=c(2,2))
 gam.check(m1)
 summary(m1)
 ```
 
+## m2
 
 Stratification_l ~ s(NDOI_s) +s(NDOI_change_s) + s(Diurnal_inequality_s)
 ```{r}
@@ -187,6 +194,8 @@ AIC(m1, m2)
 
 NDOI_change_s has an edf of 1 indicating the relationship is linear, so changing to linear
 
+## m3
+
 Stratification_l ~ s(NDOI_s) + NDOI_change_s + s(Diurnal_inequality_s)
 ```{r}
 par(mfrow=c(2,2))
@@ -201,6 +210,8 @@ AIC(m1, m2, m3)
 
 Same model as above, it must have just automatically converted to linear when it detected it was such. NDOI_change_s has no sig effect so dropping it. 
 
+## m4
+
 Stratification_l ~ s(NDOI_s) + s(Diurnal_inequality_s)
 ```{r}
 par(mfrow=c(2,2))
@@ -214,6 +225,8 @@ AIC(m1, m2, m4)
 ```
 
 Slightly better and more parsimonious without NDOI_change, so trying an interaction between 2 remaining variables
+
+## m5
 
 Stratification_l ~ te(NDOI_s, Diurnal_inequality_s)
 ```{r}
@@ -231,6 +244,8 @@ This is worse, so m4 is best so far
 
 Now trying with NDOI log transformed
 
+## m1b
+
 Stratification_l ~ te(NDOI_l_s, NDOI_change_s, Diurnal_inequality_s)
 ```{r}
 par(mfrow=c(2,2))
@@ -241,6 +256,7 @@ gam.check(m1b)
 summary(m1b)
 ```
 
+## m2b
 
 Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s)
 ```{r}
@@ -256,6 +272,8 @@ AIC(m1b, m2b)
 
 Slightly better and more parsimonious. Only Diurnal_frequency is nonlinear, so using linear versions of the other 2
 
+## m3b
+
 Stratification_l ~ NDOI_l_s + NDOI_change_s + s(Diurnal_inequality_s)
 ```{r}
 par(mfrow=c(2,2))
@@ -270,6 +288,8 @@ AIC(m1b, m2b, m3b)
 
 Better, but NDOI_change isn't significant, so dropping it
 
+## m4b
+
 Stratification_l ~ NDOI_l_s + s(Diurnal_inequality_s)
 ```{r}
 par(mfrow=c(2,2))
@@ -283,6 +303,8 @@ AIC(m1b, m2b, m3b, m4b)
 ```
 
 Basically the same and more parsimonious. Now trying an interaction among 2 remaining variables. 
+
+## m5b
 
 Stratification_l ~ te(NDOI_l_s, Diurnal_inequality_s)
 ```{r}
@@ -303,7 +325,7 @@ AIC(m4, m4b)
 
 m4b is best, moving forward with that
 
-## Plot m4 results
+# Plot m4b results
 
 Generate predictions
 ```{r}
