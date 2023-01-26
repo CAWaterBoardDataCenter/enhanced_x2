@@ -42,19 +42,27 @@ read data
 ```{r}
 d<-read_csv("data/X2_ModelInputs_v1.csv")%>%
   filter(if_any(everything(), ~ !is.na(.x)))%>% # Remove empty rows
-  rename(NDOI=`NDOI (cfs)`, Diurnal_inequality=`Diurnal Inequality (m)`, Stratification=`Stratification (PSU)`,
-         X2_surface=`X2 Top Salinity (km)`, X2_bottom=`X2 Bottom Salinity (km)`)%>%
+  rename(NDOI=`NDOI (cfs)`, Diurnal_inequality=`Diurnal_Inequality (m)`, Stratification=`Stratification (PSU)`,
+         X2_surface=`X2_TopSalinity (km)`, X2_bottom=`X2_BottomSalinity (km)`, Wind_speed=`Wind Speed (m/s)`)%>%
   mutate(Date=dmy(Date))%>%
   arrange(Date)%>%
   mutate(NDOI_change=NDOI-lag(NDOI),
          NDOI_change_mag=abs(NDOI_change),
          NDOI_change_sign=sign(NDOI_change),
-         NDOI_prop_change=NDOI_change/lag(NDOI)) 
+         NDOI_prop_change=NDOI_change/lag(NDOI),
+         Diurnal_inequality_1=lag(Diurnal_inequality),
+         Diurnal_inequality_2=lag(Diurnal_inequality, 2)) 
+
+# Create variable with residuals of X2_surface by NDOI
+X2_surface_model<-lm(X2_surface~log(NDOI), data=d)
+
+d<-d%>%
+  mutate(X2_surface_resid=residuals(X2_surface_model))
 
 d_long<-d%>%
   select(-NDOI_change_mag, -NDOI_change_sign)%>%
   pivot_longer(cols = c(NDOI, NDOI_change, NDOI_prop_change, 
-                        Diurnal_inequality, Stratification,
+                        Diurnal_inequality, Stratification, Wind_speed,
                         X2_surface, X2_bottom),
                names_to="variable",
                values_to="value")
@@ -98,6 +106,22 @@ ggplot(d, aes(x=X2_surface, y=Stratification, color=Diurnal_inequality))+
   theme_bw()
 ```
 
+X2 residual vs stratification
+```{r}
+ggplot(d, aes(x=X2_surface_resid, y=Stratification, color=Diurnal_inequality))+
+  geom_point()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
+Wind speed vs stratification
+```{r}
+ggplot(d, aes(x=Wind_speed, y=Stratification, color=log(NDOI)))+
+  geom_point()+
+  scale_color_viridis_c()+
+  theme_bw()
+```
+
 NDOI vs stratification
 ```{r}
 ggplot(d, aes(x=NDOI, y=Stratification, color=Diurnal_inequality))+
@@ -125,11 +149,11 @@ ggplot(d, aes(x=abs(NDOI_prop_change), y=Stratification, color=Diurnal_inequalit
   theme_bw()
 ```
 
-NDOI vs X2
+NDOI vs X2 with trend line used for residuals
 ```{r}
-ggplot(d, aes(x=NDOI, y=X2_surface, color=Diurnal_inequality))+
+ggplot(d, aes(x=log(NDOI), y=X2_surface, color=Diurnal_inequality))+
   geom_point()+
-  scale_x_log10()+
+  geom_abline(slope=coef(X2_surface_model)[2], intercept=coef(X2_surface_model)[1], color="red")+
   scale_color_viridis_c()+
   theme_bw()
 ```
@@ -161,181 +185,143 @@ Prepare data
 d_model<-d%>%
   drop_na()%>%
   mutate(across(c(Stratification, NDOI), list(l=~log(.x))),
-         across(c(NDOI, NDOI_l, NDOI_change, Diurnal_inequality), list(s=~(.x-mean(.x))/sd(.x))))
+         across(c(NDOI, NDOI_l, NDOI_change, Diurnal_inequality, Diurnal_inequality_1, Diurnal_inequality_2, Wind_speed, X2_surface_resid), list(s=~(.x-mean(.x))/sd(.x))))
 ```
+
+model function
+```{r}
+gam_model<-function(form, model_data=d_model, model_family="gaussian", plot_acf=FALSE){
+  par(mfrow=c(2,2))
+  NOAR<-bam(form, data=model_data, family=model_family) # first fit model with autoregressive (AR) term
+  par(mfrow=c(1,1))
+  r <- start_value_rho(NOAR, plot=plot_acf) # Estimate rho for autoregressive term
+  if(model_family=="gaussian"){
+    m<-bam(form, data=model_data, rho=r, family=model_family) # fit autoregressive model
+  }else{
+    m<-bam(form, data=model_data, rho=r, family=model_family, discrete=T) # fit autoregressive model
+  }
+  if(plot_acf){
+    suppressWarnings(acf_resid(m))
+  }
+  par(mfrow=c(2,2))
+  gam.check(m)
+  print(summary(m))
+  par(mfrow=c(1,1))
+  return(m)
+}
+```
+
 
 ## m1 
 
-Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m1_NOAR<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model) # first fit model with autoregressive (AR) term
-par(mfrow=c(1,1))
-m1_r <- start_value_rho(m1_NOAR, plot=TRUE) # Estimate rho for autoregressive term
-m1<-bam(Stratification_l ~ te(NDOI_s, NDOI_change_s, Diurnal_inequality_s), data=d_model, rho=m1_r) # fit autoregressive model
-par(mfrow=c(2,2))
-gam.check(m1)
-summary(m1)
+```{r, warning=FALSE}
+m1<-gam_model(Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s) + s(Wind_speed_s) + s(X2_surface_resid_s), plot_acf=TRUE, model_family="scat")
 ```
+
+Only `X2_surface_resid_s` is showing as a nonlinear effect, so making the rest linear
 
 ## m2
 
-Stratification_l ~ s(NDOI_s) +s(NDOI_change_s) + s(Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m2_NOAR<-bam(Stratification_l ~ s(NDOI_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model)
-m2_r <- start_value_rho(m2_NOAR, plot=FALSE)
-m2<-bam(Stratification_l ~ s(NDOI_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model, rho=m2_r)
-gam.check(m2)
-summary(m2)
-
+```{r, warning=FALSE}
+m2<-gam_model(Stratification_l ~ NDOI_l_s + NDOI_change_s + Diurnal_inequality_s + Wind_speed_s + s(X2_surface_resid_s), model_family="scat")
 AIC(m1, m2)
 ```
 
-NDOI_change_s has an edf of 1 indicating the relationship is linear, so changing to linear
+`NDOI_change_s` doesn't have a significant effect, so removing it
 
 ## m3
 
-Stratification_l ~ s(NDOI_s) + NDOI_change_s + s(Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m3_NOAR<-bam(Stratification_l ~ s(NDOI_s) + NDOI_change_s + s(Diurnal_inequality_s), data=d_model)
-m3_r <- start_value_rho(m3_NOAR, plot=FALSE)
-m3<-bam(Stratification_l ~ s(NDOI_s) + NDOI_change_s + s(Diurnal_inequality_s), data=d_model, rho=m3_r)
-gam.check(m3)
-summary(m3)
-
+```{r, warning=FALSE}
+m3<-gam_model(Stratification_l ~ NDOI_l_s  + Diurnal_inequality_s + Wind_speed_s + s(X2_surface_resid_s), model_family="scat")
 AIC(m1, m2, m3)
 ```
 
-Same model as above, it must have just automatically converted to linear when it detected it was such. NDOI_change_s has no sig effect so dropping it. 
+Nope, it was better with `NDOI_change_s` 
+
+Do we need interactions?
 
 ## m4
 
-Stratification_l ~ s(NDOI_s) + s(Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m4_NOAR<-bam(Stratification_l ~ s(NDOI_s) + s(Diurnal_inequality_s), data=d_model)
-m4_r <- start_value_rho(m4_NOAR, plot=FALSE)
-m4<-bam(Stratification_l ~ s(NDOI_s) + s(Diurnal_inequality_s), data=d_model, rho=m4_r)
-gam.check(m4)
-summary(m4)
-
-AIC(m1, m2, m4)
+```{r, warning=FALSE}
+m4<-gam_model(Stratification_l ~ (NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s)^2 + s(X2_surface_resid_s), model_family="scat")
+AIC(m1, m2, m3, m4)
 ```
 
-Slightly better and more parsimonious without NDOI_change, so trying an interaction between 2 remaining variables
+Only NDOI_l_s:Wind_speed_s is significant
 
 ## m5
 
-Stratification_l ~ te(NDOI_s, Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m5_NOAR<-bam(Stratification_l ~ te(NDOI_s, Diurnal_inequality_s), data=d_model)
-m5_r <- start_value_rho(m5_NOAR, plot=FALSE)
-m5<-bam(Stratification_l ~ te(NDOI_s, Diurnal_inequality_s), data=d_model, rho=m5_r)
-gam.check(m5)
-summary(m5)
-
-AIC(m1, m2, m4, m5)
+```{r, warning=FALSE}
+m5<-gam_model(Stratification_l ~ NDOI_l_s * Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s), model_family="scat")
+AIC(m1, m2, m3, m4, m5)
 ```
 
-This is worse, so m4 is best so far
+Model is much worse with NDOI_l_s:Wind_speed_s interaction
 
-Now trying with NDOI log transformed
+Do we need any interactions with X2_surface_resid_s? First trying wind speed. 
 
-## m1b
+## m6
 
-Stratification_l ~ te(NDOI_l_s, NDOI_change_s, Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m1b_NOAR<-bam(Stratification_l ~ te(NDOI_l_s, NDOI_change_s, Diurnal_inequality_s), data=d_model)
-m1b_r <- start_value_rho(m1b_NOAR, plot=FALSE)
-m1b<-bam(Stratification_l ~ te(NDOI_l_s, NDOI_change_s, Diurnal_inequality_s), data=d_model, rho=m1b_r)
-gam.check(m1b)
-summary(m1b)
+```{r, warning=FALSE}
+m6<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, Wind_speed_s), model_family="scat")
+AIC(m1, m2, m3, m4, m5, m6)
 ```
 
-## m2b
+Even worse, next NDOI_change
 
-Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m2b_NOAR<-bam(Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model)
-m2b_r <- start_value_rho(m2b_NOAR, plot=FALSE)
-m2b<-bam(Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s), data=d_model, rho=m2b_r)
-gam.check(m2b)
-summary(m2b)
+## m7
 
-AIC(m1b, m2b)
+```{r, warning=FALSE}
+m7<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, NDOI_change_s), model_family="scat")
+AIC(m1, m2, m3, m4, m5, m6, m7)
 ```
 
-Slightly better and more parsimonious. Only Diurnal_frequency is nonlinear, so using linear versions of the other 2
+Hm, looks good but linear so adding a linear interaction instead. 
 
-## m3b
+## m8
 
-Stratification_l ~ NDOI_l_s + NDOI_change_s + s(Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m3b_NOAR<-bam(Stratification_l ~ NDOI_l_s + NDOI_change_s + s(Diurnal_inequality_s), data=d_model)
-m3b_r <- start_value_rho(m3b_NOAR, plot=FALSE)
-m3b<-bam(Stratification_l ~ NDOI_l_s + NDOI_change_s + s(Diurnal_inequality_s), data=d_model, rho=m3b_r)
-gam.check(m3b)
-summary(m3b)
-
-AIC(m1b, m2b, m3b)
+```{r, warning=FALSE}
+m8<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + NDOI_change_s:X2_surface_resid_s + Diurnal_inequality_s + s(X2_surface_resid_s), model_family="scat")
+AIC(m1, m2, m3, m4, m5, m6, m7, m8)
 ```
 
-Better, but NDOI_change isn't significant, so dropping it
+Better and almost as good as m2, so adding more interactions on top of this one. Next is Diurnal inequality
 
-## m4b
+## m9
 
-Stratification_l ~ NDOI_l_s + s(Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m4b_NOAR<-bam(Stratification_l ~ NDOI_l_s + s(Diurnal_inequality_s), data=d_model)
-m4b_r <- start_value_rho(m4b_NOAR, plot=FALSE)
-m4b<-bam(Stratification_l ~ NDOI_l_s + s(Diurnal_inequality_s), data=d_model, rho=m4b_r)
-gam.check(m4b)
-summary(m4b)
-
-AIC(m1b, m2b, m3b, m4b)
+```{r, warning=FALSE}
+m9<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + NDOI_change_s:X2_surface_resid_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, Diurnal_inequality_s), model_family="scat")
+AIC(m1, m2, m3, m4, m5, m6, m7, m8, m9)
 ```
 
-Basically the same and more parsimonious. Now trying an interaction among 2 remaining variables. 
+What about only including the diurnal inequality interaction?
 
-## m5b
+## m10
 
-Stratification_l ~ te(NDOI_l_s, Diurnal_inequality_s)
-```{r}
-par(mfrow=c(2,2))
-m5b_NOAR<-bam(Stratification_l ~ te(NDOI_l_s, Diurnal_inequality_s), data=d_model)
-m5b_r <- start_value_rho(m5b_NOAR, plot=FALSE)
-m5b<-bam(Stratification_l ~ te(NDOI_l_s, Diurnal_inequality_s), data=d_model, rho=m5b_r)
-gam.check(m5b)
-summary(m5b)
-
-AIC(m1b, m2b, m3b, m4b, m5b)
+```{r, warning=FALSE}
+m10<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, Diurnal_inequality_s), model_family="scat")
+AIC(m1, m2, m3, m4, m5, m6, m7, m8, m9, m10)
 ```
 
-Worse, so m4b is best of this round, now comparing with m4
-```{r}
-AIC(m4, m4b)
-```
+m2 is still the best so moving forward with that model
 
-m4b is best, moving forward with that
-
-# Plot m4b results
+# Plot m2 results
 
 Generate predictions
 ```{r}
-newdata<-expand_grid(NDOI=seq(min(d_model$NDOI), max(d_model$NDOI), length.out=50),
-                     Diurnal_inequality=seq(min(d_model$Diurnal_inequality), max(d_model$Diurnal_inequality), length.out=50))%>%
+newdata<-expand_grid(NDOI=seq(min(d_model$NDOI), max(d_model$NDOI), length.out=10),
+                     Diurnal_inequality=seq(min(d_model$Diurnal_inequality), max(d_model$Diurnal_inequality), length.out=10),
+                     Wind_speed=seq(min(d_model$Wind_speed), max(d_model$Wind_speed), length.out=10),
+                     NDOI_change=seq(min(d_model$NDOI_change), max(d_model$NDOI_change), length.out=10),
+                     X2_surface_resid=seq(min(d_model$X2_surface_resid), max(d_model$X2_surface_resid), length.out=10))%>%
   mutate(NDOI_l=log(NDOI),
          NDOI_l_s=(NDOI_l-mean(d_model$NDOI_l))/sd(d_model$NDOI_l),
-         Diurnal_inequality_s=(Diurnal_inequality-mean(d_model$Diurnal_inequality))/sd(d_model$Diurnal_inequality))
+         Diurnal_inequality_s=(Diurnal_inequality-mean(d_model$Diurnal_inequality))/sd(d_model$Diurnal_inequality),
+         Wind_speed_s=(Wind_speed-mean(d_model$Wind_speed))/sd(d_model$Wind_speed),
+         NDOI_change_s=(NDOI_change-mean(d_model$NDOI_change))/sd(d_model$NDOI_change),
+         X2_surface_resid_s=(X2_surface_resid-mean(d_model$X2_surface_resid))/sd(d_model$X2_surface_resid))
 
-m4b_pred<-predict(m4b, newdata=newdata, se=TRUE)
+m4b_pred<-predict(m2, newdata=newdata, se=TRUE)
 
 newdata_pred<-newdata%>%
   mutate(Stratification_l=m4b_pred$fit,
@@ -346,22 +332,47 @@ newdata_pred<-newdata%>%
   rename_with(~str_remove(.x, fixed("_l")), c(Stratification_l, Stratification_l_u95, Stratification_l_l95))
 ```
 
-
-plot by NDOI
+Plotting function
 ```{r}
-ggplot(filter(newdata_pred, Diurnal_inequality%in%unique(Diurnal_inequality)[c(1, 25, 50)]), aes(x=NDOI, y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=Diurnal_inequality, color=Diurnal_inequality, group=Diurnal_inequality))+
+strat_pred_plot<-function(xvar, colorvar){
+  othervars<-c("NDOI", "Diurnal_inequality", "NDOI_change", "Wind_speed", "X2_surface_resid")
+  othervars<-othervars[-which(othervars%in%c(xvar, colorvar))]
+  
+  ggplot(
+  filter(newdata_pred, 
+         .data[[colorvar]]%in%unique(.data[[colorvar]])[c(1, 5, 10)] &
+         .data[[othervars[1]]]%in%unique(.data[[othervars[1]]])[5] &
+           .data[[othervars[2]]]%in%unique(.data[[othervars[2]]])[5] &
+           .data[[othervars[3]]]%in%unique(.data[[othervars[3]]])[5]), aes(x=.data[[xvar]], y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=.data[[colorvar]], color=.data[[colorvar]], group=.data[[colorvar]]))+
   geom_ribbon(alpha=0.4, color=NA)+
   geom_line()+
   scale_fill_viridis_c(aesthetics = c("color", "fill"))+
   theme_bw()
+}
 ```
 
 
+plot by NDOI
+```{r}
+strat_pred_plot(xvar="NDOI", colorvar="Diurnal_inequality")
+```
+
 plot by Diurnal_inequality
 ```{r}
-ggplot(filter(newdata_pred, NDOI%in%unique(NDOI)[c(1, 25, 50)]), aes(x=Diurnal_inequality, y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=NDOI, color=NDOI, group=NDOI))+
-  geom_ribbon(alpha=0.4, color=NA)+
-  geom_line()+
-  scale_fill_viridis_c(aesthetics = c("color", "fill"))+
-  theme_bw()
+strat_pred_plot(xvar="Diurnal_inequality", colorvar="NDOI")
+```
+
+plot by Wind speed
+```{r}
+strat_pred_plot(xvar="Wind_speed", colorvar="NDOI")
+```
+
+plot by NDOI change
+```{r}
+strat_pred_plot(xvar="NDOI_change", colorvar="NDOI")
+```
+
+plot by NDOI change
+```{r}
+strat_pred_plot(xvar="X2_surface_resid", colorvar="NDOI")
 ```
