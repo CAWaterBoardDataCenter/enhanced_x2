@@ -36,6 +36,7 @@ library(ggplot2)
 library(GGally)
 library(mgcv)
 library(itsadug)
+library(downloadthis)
 ```
 
 read data
@@ -339,15 +340,15 @@ strat_pred_plot<-function(xvar, colorvar){
   othervars<-othervars[-which(othervars%in%c(xvar, colorvar))]
   
   ggplot(
-  filter(newdata_pred, 
-         .data[[colorvar]]%in%unique(.data[[colorvar]])[c(1, 5, 10)] &
-         .data[[othervars[1]]]%in%unique(.data[[othervars[1]]])[5] &
-           .data[[othervars[2]]]%in%unique(.data[[othervars[2]]])[5] &
-           .data[[othervars[3]]]%in%unique(.data[[othervars[3]]])[5]), aes(x=.data[[xvar]], y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=.data[[colorvar]], color=.data[[colorvar]], group=.data[[colorvar]]))+
-  geom_ribbon(alpha=0.4, color=NA)+
-  geom_line()+
-  scale_fill_viridis_c(aesthetics = c("color", "fill"))+
-  theme_bw()
+    filter(newdata_pred, 
+           .data[[colorvar]]%in%unique(.data[[colorvar]])[c(1, 5, 10)] &
+             .data[[othervars[1]]]%in%unique(.data[[othervars[1]]])[5] &
+             .data[[othervars[2]]]%in%unique(.data[[othervars[2]]])[5] &
+             .data[[othervars[3]]]%in%unique(.data[[othervars[3]]])[5]), aes(x=.data[[xvar]], y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=.data[[colorvar]], color=.data[[colorvar]], group=.data[[colorvar]]))+
+    geom_ribbon(alpha=0.4, color=NA)+
+    geom_line()+
+    scale_fill_viridis_c(aesthetics = c("color", "fill"))+
+    theme_bw()
 }
 ```
 
@@ -376,3 +377,45 @@ plot by NDOI change
 ```{r}
 strat_pred_plot(xvar="X2_surface_resid", colorvar="NDOI")
 ```
+
+Plot measured and model-predicted stratification
+```{r}
+d_model_pred<-d_model%>%
+  mutate(stratification_pred_l=predict(m2),
+         stratification_pred=exp(stratification_pred_l))
+
+d_model_pred_long<-d_model_pred%>%
+  select(Date, Stratification, stratification_pred)%>%
+  pivot_longer(cols = c(stratification_pred, Stratification), names_to = "variable", values_to="stratification")%>%
+  mutate(variable=recode(variable, stratification_pred="modeled", Stratification="measured"))
+
+ggplot(d_model_pred_long, aes(x=Date, y=stratification, color=variable))+
+  geom_line()+
+  scale_color_viridis_d(end=0.8)+
+  theme_bw()
+```
+
+Plot measured vs modeled stratification
+```{r}
+ggplot(d_model_pred, aes(x=Stratification, y=stratification_pred))+
+  geom_point()+
+  xlab("Measured stratification")+
+  ylab("Modeled stratification")+
+  theme_bw()
+```
+
+# Download modeled stratification
+
+```{r, echo=FALSE}
+download_this(
+  .data = d_model_pred,
+  output_name = paste("Modeled stratification data", Sys.Date()),
+  output_extension = ".csv",
+  button_label = "Download data",
+  button_type = "warning",
+  has_icon = TRUE,
+  icon = "fa fa-save",
+  csv2 = FALSE
+)
+```
+
