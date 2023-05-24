@@ -41,29 +41,35 @@ library(downloadthis)
 
 read data
 ```{r}
-d<-read_csv("data/X2_ModelInputs_v1.csv")%>%
+test_train_cutoff<-as_date("2022-09-29")
+
+d<-read_csv("data/X2_ModelInputs_v2.csv")%>%
   filter(if_any(everything(), ~ !is.na(.x)))%>% # Remove empty rows
-  rename(NDOI=`NDOI (cfs)`, Diurnal_inequality=`Diurnal_Inequality (m)`, Stratification=`Stratification (PSU)`,
+  rename(NDOI=`NDOI (cfs)`, Weak_ebb_flood=`Weak Ebb-Flood (m)`, Stratification=`Stratification (PSU)`,
          X2_surface=`X2_TopSalinity (km)`, X2_bottom=`X2_BottomSalinity (km)`, Wind_speed=`Wind Speed (m/s)`)%>%
   mutate(Date=dmy(Date))%>%
   arrange(Date)%>%
-  mutate(NDOI_change=NDOI-lag(NDOI),
+  mutate(data=if_else(Date>test_train_cutoff, "Testing", "Training"),
+         NDOI_change=NDOI-lag(NDOI),
          NDOI_change_mag=abs(NDOI_change),
          NDOI_change_sign=sign(NDOI_change),
          NDOI_prop_change=NDOI_change/lag(NDOI),
-         Diurnal_inequality_1=lag(Diurnal_inequality),
-         Diurnal_inequality_2=lag(Diurnal_inequality, 2)) 
+         Weak_ebb_flood_1=lag(Weak_ebb_flood),
+         Weak_ebb_flood_2=lag(Weak_ebb_flood, 2))
+
+d_train<-d%>%
+  filter(data=="Training")
 
 # Create variable with residuals of X2_surface by NDOI
-X2_surface_model<-lm(X2_surface~log(NDOI), data=d)
+X2_surface_model<-lm(X2_surface~log(NDOI), data=d_train)
 
-d<-d%>%
+d_train<-d_train%>%
   mutate(X2_surface_resid=residuals(X2_surface_model))
 
-d_long<-d%>%
+d_long<-d_train%>%
   select(-NDOI_change_mag, -NDOI_change_sign)%>%
   pivot_longer(cols = c(NDOI, NDOI_change, NDOI_prop_change, 
-                        Diurnal_inequality, Stratification, Wind_speed,
+                        Weak_ebb_flood, Stratification, Wind_speed,
                         X2_surface, X2_bottom),
                names_to="variable",
                values_to="value")
@@ -91,9 +97,9 @@ ggplot(filter(d_long, year(Date)==2022 & month(Date)>=5), aes(x=Date, y=value, c
   theme(legend.position="none")
 ```
 
-Diurnal_inequality vs stratification
+Weak_ebb_flood vs stratification
 ```{r}
-ggplot(d, aes(x=Diurnal_inequality, y=Stratification, color=X2_surface))+
+ggplot(d_train, aes(x=Weak_ebb_flood, y=Stratification, color=X2_surface))+
   geom_point()+
   scale_color_viridis_c()+
   theme_bw()
@@ -101,7 +107,7 @@ ggplot(d, aes(x=Diurnal_inequality, y=Stratification, color=X2_surface))+
 
 X2 vs stratification
 ```{r}
-ggplot(d, aes(x=X2_surface, y=Stratification, color=Diurnal_inequality))+
+ggplot(d_train, aes(x=X2_surface, y=Stratification, color=Weak_ebb_flood))+
   geom_point()+
   scale_color_viridis_c()+
   theme_bw()
@@ -109,7 +115,7 @@ ggplot(d, aes(x=X2_surface, y=Stratification, color=Diurnal_inequality))+
 
 X2 residual vs stratification
 ```{r}
-ggplot(d, aes(x=X2_surface_resid, y=Stratification, color=Diurnal_inequality))+
+ggplot(d_train, aes(x=X2_surface_resid, y=Stratification, color=Weak_ebb_flood))+
   geom_point()+
   scale_color_viridis_c()+
   theme_bw()
@@ -117,7 +123,7 @@ ggplot(d, aes(x=X2_surface_resid, y=Stratification, color=Diurnal_inequality))+
 
 Wind speed vs stratification
 ```{r}
-ggplot(d, aes(x=Wind_speed, y=Stratification, color=log(NDOI)))+
+ggplot(d_train, aes(x=Wind_speed, y=Stratification, color=log(NDOI)))+
   geom_point()+
   scale_color_viridis_c()+
   theme_bw()
@@ -125,7 +131,7 @@ ggplot(d, aes(x=Wind_speed, y=Stratification, color=log(NDOI)))+
 
 NDOI vs stratification
 ```{r}
-ggplot(d, aes(x=NDOI, y=Stratification, color=Diurnal_inequality))+
+ggplot(d_train, aes(x=NDOI, y=Stratification, color=Weak_ebb_flood))+
   geom_point()+
   scale_x_log10()+
   scale_color_viridis_c()+
@@ -134,7 +140,7 @@ ggplot(d, aes(x=NDOI, y=Stratification, color=Diurnal_inequality))+
 
 NDOI change vs stratification
 ```{r}
-ggplot(d, aes(x=abs(NDOI_change_mag), y=Stratification, color=factor(NDOI_change_sign)))+
+ggplot(d_train, aes(x=abs(NDOI_change_mag), y=Stratification, color=factor(NDOI_change_sign)))+
   geom_point()+
   scale_x_log10()+
   scale_color_viridis_d()+
@@ -143,7 +149,7 @@ ggplot(d, aes(x=abs(NDOI_change_mag), y=Stratification, color=factor(NDOI_change
 
 NDOI prop change vs stratification
 ```{r}
-ggplot(d, aes(x=abs(NDOI_prop_change), y=Stratification, color=Diurnal_inequality))+
+ggplot(d_train, aes(x=abs(NDOI_prop_change), y=Stratification, color=Weak_ebb_flood))+
   geom_point()+
   #scale_x_log10()+
   scale_color_viridis_c()+
@@ -152,7 +158,7 @@ ggplot(d, aes(x=abs(NDOI_prop_change), y=Stratification, color=Diurnal_inequalit
 
 NDOI vs X2 with trend line used for residuals
 ```{r}
-ggplot(d, aes(x=log(NDOI), y=X2_surface, color=Diurnal_inequality))+
+ggplot(d_train, aes(x=log(NDOI), y=X2_surface, color=Weak_ebb_flood))+
   geom_point()+
   geom_abline(slope=coef(X2_surface_model)[2], intercept=coef(X2_surface_model)[1], color="red")+
   scale_color_viridis_c()+
@@ -161,7 +167,7 @@ ggplot(d, aes(x=log(NDOI), y=X2_surface, color=Diurnal_inequality))+
 
 NDOI change vs X2
 ```{r}
-ggplot(d, aes(x=NDOI_change_mag, y=X2_surface, color=log(NDOI)))+
+ggplot(d_train, aes(x=NDOI_change_mag, y=X2_surface, color=log(NDOI)))+
   geom_point()+
   scale_x_log10()+
   scale_color_viridis_c()+
@@ -170,23 +176,23 @@ ggplot(d, aes(x=NDOI_change_mag, y=X2_surface, color=log(NDOI)))+
 
 Pairs plot of all variables
 ```{r, warning=FALSE, fig.height=10, fig.width=10}
-ggpairs(d)+
+ggpairs(d_train)+
   theme_bw()
 ```
 
 Takeaways to inform model construction
 1. NDOI_ _change_mag is highly correlated with NDOI, but NDOI_change is not
 2. X2 is highly correlated with NDOI
-3. Diurnal_inequality not correlated with anything (except slightly with stratification)
+3. Weak_ebb_flood not correlated with anything (except slightly with stratification)
 
 # Model
 
 Prepare data
 ```{r}
-d_model<-d%>%
+d_model<-d_train%>%
   drop_na()%>%
   mutate(across(c(Stratification, NDOI), list(l=~log(.x))),
-         across(c(NDOI, NDOI_l, NDOI_change, Diurnal_inequality, Diurnal_inequality_1, Diurnal_inequality_2, Wind_speed, X2_surface_resid), list(s=~(.x-mean(.x))/sd(.x))))
+         across(c(NDOI, NDOI_l, NDOI_change, Weak_ebb_flood, Weak_ebb_flood_1, Weak_ebb_flood_2, Wind_speed, X2_surface_resid), list(s=~(.x-mean(.x))/sd(.x))))
 ```
 
 model function
@@ -216,7 +222,7 @@ gam_model<-function(form, model_data=d_model, model_family="gaussian", plot_acf=
 ## m1 
 
 ```{r, warning=FALSE}
-m1<-gam_model(Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Diurnal_inequality_s) + s(Wind_speed_s) + s(X2_surface_resid_s), plot_acf=TRUE, model_family="scat")
+m1<-gam_model(Stratification_l ~ s(NDOI_l_s) +s(NDOI_change_s) + s(Weak_ebb_flood_s) + s(Wind_speed_s) + s(X2_surface_resid_s), plot_acf=TRUE, model_family="scat")
 ```
 
 Only `X2_surface_resid_s` is showing as a nonlinear effect, so making the rest linear
@@ -224,7 +230,7 @@ Only `X2_surface_resid_s` is showing as a nonlinear effect, so making the rest l
 ## m2
 
 ```{r, warning=FALSE}
-m2<-gam_model(Stratification_l ~ NDOI_l_s + NDOI_change_s + Diurnal_inequality_s + Wind_speed_s + s(X2_surface_resid_s), model_family="scat")
+m2<-gam_model(Stratification_l ~ NDOI_l_s + NDOI_change_s + Weak_ebb_flood_s + Wind_speed_s + s(X2_surface_resid_s), model_family="scat")
 AIC(m1, m2)
 ```
 
@@ -233,7 +239,7 @@ AIC(m1, m2)
 ## m3
 
 ```{r, warning=FALSE}
-m3<-gam_model(Stratification_l ~ NDOI_l_s  + Diurnal_inequality_s + Wind_speed_s + s(X2_surface_resid_s), model_family="scat")
+m3<-gam_model(Stratification_l ~ NDOI_l_s  + Weak_ebb_flood_s + Wind_speed_s + s(X2_surface_resid_s), model_family="scat")
 AIC(m1, m2, m3)
 ```
 
@@ -244,7 +250,7 @@ Do we need interactions?
 ## m4
 
 ```{r, warning=FALSE}
-m4<-gam_model(Stratification_l ~ (NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s)^2 + s(X2_surface_resid_s), model_family="scat")
+m4<-gam_model(Stratification_l ~ (NDOI_l_s + Wind_speed_s + NDOI_change_s + Weak_ebb_flood_s)^2 + s(X2_surface_resid_s), model_family="scat")
 AIC(m1, m2, m3, m4)
 ```
 
@@ -253,76 +259,29 @@ Only NDOI_l_s:Wind_speed_s is significant
 ## m5
 
 ```{r, warning=FALSE}
-m5<-gam_model(Stratification_l ~ NDOI_l_s * Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s), model_family="scat")
+m5<-gam_model(Stratification_l ~ NDOI_l_s * Wind_speed_s + NDOI_change_s + Weak_ebb_flood_s + s(X2_surface_resid_s), model_family="scat")
 AIC(m1, m2, m3, m4, m5)
 ```
 
-Model is much worse with NDOI_l_s:Wind_speed_s interaction
+Model is better with NDOI_l_s:Wind_speed_s interaction so moving forward with m5
 
-Do we need any interactions with X2_surface_resid_s? First trying wind speed. 
-
-## m6
-
-```{r, warning=FALSE}
-m6<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, Wind_speed_s), model_family="scat")
-AIC(m1, m2, m3, m4, m5, m6)
-```
-
-Even worse, next NDOI_change
-
-## m7
-
-```{r, warning=FALSE}
-m7<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, NDOI_change_s), model_family="scat")
-AIC(m1, m2, m3, m4, m5, m6, m7)
-```
-
-Hm, looks good but linear so adding a linear interaction instead. 
-
-## m8
-
-```{r, warning=FALSE}
-m8<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + NDOI_change_s:X2_surface_resid_s + Diurnal_inequality_s + s(X2_surface_resid_s), model_family="scat")
-AIC(m1, m2, m3, m4, m5, m6, m7, m8)
-```
-
-Better and almost as good as m2, so adding more interactions on top of this one. Next is Diurnal inequality
-
-## m9
-
-```{r, warning=FALSE}
-m9<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + NDOI_change_s:X2_surface_resid_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, Diurnal_inequality_s), model_family="scat")
-AIC(m1, m2, m3, m4, m5, m6, m7, m8, m9)
-```
-
-What about only including the diurnal inequality interaction?
-
-## m10
-
-```{r, warning=FALSE}
-m10<-gam_model(Stratification_l ~ NDOI_l_s + Wind_speed_s + NDOI_change_s + Diurnal_inequality_s + s(X2_surface_resid_s) + ti(X2_surface_resid_s, Diurnal_inequality_s), model_family="scat")
-AIC(m1, m2, m3, m4, m5, m6, m7, m8, m9, m10)
-```
-
-m2 is still the best so moving forward with that model
-
-# Plot m2 results
+# Plot m5 results
 
 Generate predictions
 ```{r}
 newdata<-expand_grid(NDOI=seq(min(d_model$NDOI), max(d_model$NDOI), length.out=10),
-                     Diurnal_inequality=seq(min(d_model$Diurnal_inequality), max(d_model$Diurnal_inequality), length.out=10),
+                     Weak_ebb_flood=seq(min(d_model$Weak_ebb_flood), max(d_model$Weak_ebb_flood), length.out=10),
                      Wind_speed=seq(min(d_model$Wind_speed), max(d_model$Wind_speed), length.out=10),
                      NDOI_change=seq(min(d_model$NDOI_change), max(d_model$NDOI_change), length.out=10),
                      X2_surface_resid=seq(min(d_model$X2_surface_resid), max(d_model$X2_surface_resid), length.out=10))%>%
   mutate(NDOI_l=log(NDOI),
          NDOI_l_s=(NDOI_l-mean(d_model$NDOI_l))/sd(d_model$NDOI_l),
-         Diurnal_inequality_s=(Diurnal_inequality-mean(d_model$Diurnal_inequality))/sd(d_model$Diurnal_inequality),
+         Weak_ebb_flood_s=(Weak_ebb_flood-mean(d_model$Weak_ebb_flood))/sd(d_model$Weak_ebb_flood),
          Wind_speed_s=(Wind_speed-mean(d_model$Wind_speed))/sd(d_model$Wind_speed),
          NDOI_change_s=(NDOI_change-mean(d_model$NDOI_change))/sd(d_model$NDOI_change),
          X2_surface_resid_s=(X2_surface_resid-mean(d_model$X2_surface_resid))/sd(d_model$X2_surface_resid))
 
-m4b_pred<-predict(m2, newdata=newdata, se=TRUE)
+m4b_pred<-predict(m5, newdata=newdata, se=TRUE)
 
 newdata_pred<-newdata%>%
   mutate(Stratification_l=m4b_pred$fit,
@@ -336,7 +295,7 @@ newdata_pred<-newdata%>%
 Plotting function
 ```{r}
 strat_pred_plot<-function(xvar, colorvar){
-  othervars<-c("NDOI", "Diurnal_inequality", "NDOI_change", "Wind_speed", "X2_surface_resid")
+  othervars<-c("NDOI", "Weak_ebb_flood", "NDOI_change", "Wind_speed", "X2_surface_resid")
   othervars<-othervars[-which(othervars%in%c(xvar, colorvar))]
   
   ggplot(
@@ -355,12 +314,12 @@ strat_pred_plot<-function(xvar, colorvar){
 
 plot by NDOI
 ```{r}
-strat_pred_plot(xvar="NDOI", colorvar="Diurnal_inequality")
+strat_pred_plot(xvar="NDOI", colorvar="Weak_ebb_flood")
 ```
 
-plot by Diurnal_inequality
+plot by Weak_ebb_flood
 ```{r}
-strat_pred_plot(xvar="Diurnal_inequality", colorvar="NDOI")
+strat_pred_plot(xvar="Weak_ebb_flood", colorvar="NDOI")
 ```
 
 plot by Wind speed
@@ -378,27 +337,127 @@ plot by NDOI change
 strat_pred_plot(xvar="X2_surface_resid", colorvar="NDOI")
 ```
 
+# Cross validation
+
+Testing data
+```{r}
+d_test<-d%>%
+  filter(data=="Testing" & !is.na(X2_surface))
+
+
+# Create variable with residuals of X2_surface by NDOI
+X2_surface_model_train<-lm(X2_surface~log(NDOI), data=d_test)
+
+d_test<-d_test%>%
+  mutate(X2_surface_resid=residuals(X2_surface_model_train))%>%
+  drop_na()%>%
+  mutate(across(c(Stratification, NDOI), list(l=~log(.x))),
+         across(c(NDOI, NDOI_l, NDOI_change, Weak_ebb_flood, Weak_ebb_flood_1, Weak_ebb_flood_2, Wind_speed, X2_surface_resid), list(s=~(.x-mean(d_model[[cur_column()]]))/sd(d_model[[cur_column()]]))))
+
+d_test_pred<-d_test%>% # center and scale data based on original model inputs
+  mutate(stratification_pred_l=predict(m5, newdata=.), # Generate model predictions
+         stratification_pred=exp(stratification_pred_l),
+         Stratification_diff=stratification_pred-Stratification,
+         Stratification_diff_prop=Stratification_diff/Stratification)
+```
+
+Cross-validation statistics
+```{r}
+# RMSE
+sqrt(mean((d_test_pred$Stratification_diff)^2))
+
+# Mean difference (for bias)
+mean(d_test_pred$Stratification_diff)
+
+# Pearson's correlation
+cor(d_test_pred$Stratification, d_test_pred$stratification_pred, method = 'pearson')
+```
+
+
+plot measured vs predicted
+```{r}
+ggplot(d_test_pred, aes(x=Stratification, y=stratification_pred))+
+  geom_point()+
+  geom_abline(intercept = 0, slope=1, color="red")+
+  theme_bw()
+```
+
+plot diff vs outflow
+```{r}
+ggplot(d_test_pred, aes(x=NDOI, y=Stratification_diff))+
+  geom_point()+
+  geom_hline(yintercept=0, color="red")+
+  theme_bw()
+```
+
+plot diff vs outflow change
+```{r}
+ggplot(d_test_pred, aes(x=NDOI_change, y=Stratification_diff))+
+  geom_point()+
+  geom_hline(yintercept=0, color="red")+
+  theme_bw()
+```
+
+plot diff vs Weak_ebb_flood
+```{r}
+ggplot(d_test_pred, aes(x=Weak_ebb_flood, y=Stratification_diff))+
+  geom_point()+
+  geom_hline(yintercept=0, color="red")+
+  theme_bw()
+```
+
+plot diff vs Wind_speed
+```{r}
+ggplot(d_test_pred, aes(x=Wind_speed, y=Stratification_diff))+
+  geom_point()+
+  geom_hline(yintercept=0, color="red")+
+  theme_bw()
+```
+
+plot diff vs X2_surface_resid
+```{r}
+ggplot(d_test_pred, aes(x=X2_surface_resid, y=Stratification_diff))+
+  geom_point()+
+  geom_hline(yintercept=0, color="red")+
+  theme_bw()
+```
+
+plot diff vs X2_surface
+```{r}
+ggplot(d_test_pred, aes(x=X2_surface, y=Stratification_diff))+
+  geom_point()+
+  geom_hline(yintercept=0, color="red")+
+  theme_bw()
+```
+
+# Predict
+
 Plot measured and model-predicted stratification
 ```{r}
 d_model_pred<-d_model%>%
-  mutate(stratification_pred_l=predict(m2),
+  bind_rows(d_test)%>%
+  mutate(stratification_pred_l=predict(m5, newdata=.),
          stratification_pred=exp(stratification_pred_l))
 
 d_model_pred_long<-d_model_pred%>%
   select(Date, Stratification, stratification_pred)%>%
   pivot_longer(cols = c(stratification_pred, Stratification), names_to = "variable", values_to="stratification")%>%
-  mutate(variable=recode(variable, stratification_pred="modeled", Stratification="measured"))
+  mutate(variable=recode(variable, stratification_pred="modeled", Stratification="measured"))%>%
+  complete(Date=seq.Date(min(d$Date), max(d$Date), by = "day"), variable)
 
 ggplot(d_model_pred_long, aes(x=Date, y=stratification, color=variable))+
   geom_line()+
+  geom_vline(xintercept=test_train_cutoff, color="red", linetype=2)+
   scale_color_viridis_d(end=0.8)+
   theme_bw()
 ```
 
 Plot measured vs modeled stratification
 ```{r}
-ggplot(d_model_pred, aes(x=Stratification, y=stratification_pred))+
-  geom_point()+
+ggplot(d_model_pred, aes(x=Stratification, y=stratification_pred, color=data))+
+  geom_abline(intercept=0, slope=1, color="red")+
+  geom_point(alpha=0.5)+
+  scale_color_viridis_d(end=0.8)+
   xlab("Measured stratification")+
   ylab("Modeled stratification")+
   theme_bw()
@@ -418,4 +477,3 @@ download_this(
   csv2 = FALSE
 )
 ```
-
