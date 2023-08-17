@@ -37,6 +37,7 @@ library(GGally)
 library(mgcv)
 library(itsadug)
 library(downloadthis)
+library(patchwork)
 ```
 
 read data
@@ -294,9 +295,18 @@ newdata_pred<-newdata%>%
 
 Plotting function
 ```{r}
-strat_pred_plot<-function(xvar, colorvar){
+strat_pred_plot<-function(xvar, colorvar, palette="D"){
   othervars<-c("NDOI", "Weak_ebb_flood", "NDOI_change", "Wind_speed", "X2_surface_resid")
   othervars<-othervars[-which(othervars%in%c(xvar, colorvar))]
+  
+  name_unit<-function(var){
+    unit<-case_when(var%in%c("NDOI", "NDOI_change") ~ "cfs",
+              var%in%c("Weak_ebb_flood") ~ "?",
+              var%in%c("Wind_speed") ~ "m/s",
+              var%in%c("X2_surface_resid") ~ "km")
+    
+    out<-paste0(str_replace_all(var, "_", " "), " (", unit, ")")
+  }
   
   ggplot(
     filter(newdata_pred, 
@@ -306,36 +316,52 @@ strat_pred_plot<-function(xvar, colorvar){
              .data[[othervars[3]]]%in%unique(.data[[othervars[3]]])[5]), aes(x=.data[[xvar]], y=Stratification, ymin=Stratification_l95, ymax=Stratification_u95, fill=.data[[colorvar]], color=.data[[colorvar]], group=.data[[colorvar]]))+
     geom_ribbon(alpha=0.4, color=NA)+
     geom_line()+
-    scale_fill_viridis_c(aesthetics = c("color", "fill"))+
-    theme_bw()
+    scale_fill_viridis_c(aesthetics = c("color", "fill"), end=ifelse(palette=="A", 0.8, 1), option=palette, name=name_unit(colorvar))+
+    xlab(name_unit(xvar))+
+    ylab("Stratification (PSU)")+
+    theme_bw()+
+    theme(axis.text.x=element_text(angle=45, hjust=1))
 }
 ```
 
 
 plot by NDOI
 ```{r}
-strat_pred_plot(xvar="NDOI", colorvar="Weak_ebb_flood")
+p_NDOI<-strat_pred_plot(xvar="NDOI", colorvar="Wind_speed", palette="A")
+p_NDOI
 ```
 
 plot by Weak_ebb_flood
 ```{r}
-strat_pred_plot(xvar="Weak_ebb_flood", colorvar="NDOI")
+p_ebb_flood<-strat_pred_plot(xvar="Weak_ebb_flood", colorvar="NDOI")
+p_ebb_flood
 ```
 
 plot by Wind speed
 ```{r}
-strat_pred_plot(xvar="Wind_speed", colorvar="NDOI")
+p_Wind_speed<-strat_pred_plot(xvar="Wind_speed", colorvar="NDOI")
+p_Wind_speed
 ```
 
 plot by NDOI change
 ```{r}
-strat_pred_plot(xvar="NDOI_change", colorvar="NDOI")
+p_NDOI_change<-strat_pred_plot(xvar="NDOI_change", colorvar="NDOI")
+p_NDOI_change
 ```
 
-plot by NDOI change
+plot by X2_surface_resid
 ```{r}
-strat_pred_plot(xvar="X2_surface_resid", colorvar="NDOI")
+p_X2_surface_resid<-strat_pred_plot(xvar="X2_surface_resid", colorvar="NDOI")
+p_X2_surface_resid
 ```
+
+Save all plots together
+```{r}
+p<-p_NDOI+p_ebb_flood+p_Wind_speed+p_NDOI_change+p_X2_surface_resid+plot_annotation(tag_levels="a", tag_suffix=")")+plot_layout(guides = "collect")
+
+ggsave(plot=p, filename="figs/stratification model predictions.png", width=10, height=8)
+```
+
 
 # Cross validation
 
@@ -346,10 +372,10 @@ d_test<-d%>%
 
 
 # Create variable with residuals of X2_surface by NDOI
-X2_surface_model_train<-lm(X2_surface~log(NDOI), data=d_test)
+X2_surface_model_test<-lm(X2_surface~log(NDOI), data=d_test)
 
 d_test<-d_test%>%
-  mutate(X2_surface_resid=residuals(X2_surface_model_train))%>%
+  mutate(X2_surface_resid=residuals(X2_surface_model_test))%>%
   drop_na()%>%
   mutate(across(c(Stratification, NDOI), list(l=~log(.x))),
          across(c(NDOI, NDOI_l, NDOI_change, Weak_ebb_flood, Weak_ebb_flood_1, Weak_ebb_flood_2, Wind_speed, X2_surface_resid), list(s=~(.x-mean(d_model[[cur_column()]]))/sd(d_model[[cur_column()]]))))
@@ -442,26 +468,38 @@ d_model_pred<-d_model%>%
 d_model_pred_long<-d_model_pred%>%
   select(Date, Stratification, stratification_pred)%>%
   pivot_longer(cols = c(stratification_pred, Stratification), names_to = "variable", values_to="stratification")%>%
-  mutate(variable=recode(variable, stratification_pred="modeled", Stratification="measured"))%>%
+  mutate(variable=recode(variable, stratification_pred="Modeled", Stratification="Measured"))%>%
   complete(Date=seq.Date(min(d$Date), max(d$Date), by = "day"), variable)
 
-ggplot(d_model_pred_long, aes(x=Date, y=stratification, color=variable))+
+P_CV_time<-ggplot(d_model_pred_long, aes(x=Date, y=stratification, color=variable))+
   geom_line()+
   geom_vline(xintercept=test_train_cutoff, color="red", linetype=2)+
-  scale_color_viridis_d(end=0.8)+
-  theme_bw()
+  scale_color_viridis_d(end=0.8, option="A", name=NULL)+
+  ylab("Stratification (PSU)")+
+  theme_bw()+
+  theme(legend.position=c(0.15, 0.85), legend.background=element_rect(color="black"))
+P_CV_time
 ```
 
 Plot measured vs modeled stratification
 ```{r}
-ggplot(d_model_pred, aes(x=Stratification, y=stratification_pred, color=data))+
+p_meas_pred<-ggplot(d_model_pred, aes(x=Stratification, y=stratification_pred, color=data))+
   geom_abline(intercept=0, slope=1, color="red")+
   geom_point(alpha=0.5)+
-  scale_color_viridis_d(end=0.8)+
-  xlab("Measured stratification")+
-  ylab("Modeled stratification")+
-  theme_bw()
+  scale_color_viridis_d(end=0.8, name=NULL)+
+  xlab("Measured stratification (PSU)")+
+  ylab("Modeled stratification (PSU)")+
+  theme_bw()+
+  theme(legend.position=c(0.85, 0.15), legend.background=element_rect(color="black"))
+p_meas_pred
 ```
+
+Save CV plots together
+```{r}
+p<-P_CV_time+p_meas_pred/plot_annotation(tag_levels="a", tag_suffix=")")
+ggsave(plot=p, filename="figs/stratification model CV.png", width=12, height=7)
+```
+
 
 # Download modeled stratification
 
