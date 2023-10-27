@@ -301,7 +301,7 @@ strat_pred_plot<-function(xvar, colorvar, palette="D"){
   
   name_unit<-function(var){
     unit<-case_when(var%in%c("NDOI", "NDOI_change") ~ "cfs",
-              var%in%c("Weak_ebb_flood") ~ "?",
+              var%in%c("Weak_ebb_flood") ~ "m",
               var%in%c("Wind_speed") ~ "m/s",
               var%in%c("X2_surface_resid") ~ "km")
     
